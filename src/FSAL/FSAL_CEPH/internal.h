@@ -77,6 +77,8 @@ struct ceph_export {
 	struct ceph_handle *root;	/*< The root handle */
 	char *user_id;			/* cephx user_id for this mount */
 	char *secret_key;
+	bool pnfs_ds_enabled;
+	bool pnfs_mds_enabled;
 };
 
 struct ceph_fd {
@@ -178,11 +180,29 @@ void ceph2fsal_attributes(const struct ceph_statx *stx,
 
 void export_ops_init(struct export_ops *ops);
 void handle_ops_init(struct fsal_obj_ops *ops);
-#ifdef CEPH_PNFS
-void pnfs_ds_ops_init(struct fsal_pnfs_ds_ops *ops);
+
+/*
+ * Following have been introduced for pNFS support
+ */
+
+/* Need to call this to initialize export_ops for pnfs */
 void export_ops_pnfs(struct export_ops *ops);
+
+/* Need to call this to initialize obj_ops for pnfs */
 void handle_ops_pnfs(struct fsal_obj_ops *ops);
-#endif				/* CEPH_PNFS */
+
+/* Need to call this to initialize ops for pnfs */
+void fsal_ops_pnfs(struct fsal_ops *ops);
+
+void dsh_ops_init(struct fsal_dsh_ops *ops);
+
+void pnfs_ds_ops_init(struct fsal_pnfs_ds_ops *ops);
+
+size_t fs_da_addr_size(struct fsal_module *fsal_hdl);
+
+nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
+			XDR *da_addr_body, const layouttype4 type,
+			const struct pnfs_deviceid *deviceid);
 
 struct state_t *ceph_alloc_state(struct fsal_export *exp_hdl,
 				 enum state_type state_type,

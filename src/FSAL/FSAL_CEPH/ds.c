@@ -33,7 +33,7 @@
  * Also, creating a data server handle -- now called via the DS itself.
  */
 
-#ifdef CEPH_PNFS
+
 
 #include "config.h"
 
@@ -50,7 +50,7 @@
 	typeof(a) _a = (a);			\
 	typeof(b) _b = (b);			\
 	_a < _b ? _a : _b; })
-
+#ifdef CEPH_PNFS
 /**
  * @brief Local invalidate
  *
@@ -421,12 +421,15 @@ static nfsstat4 make_ds_handle(struct fsal_pnfs_ds *const pds,
 	memcpy(&ds->wire, desc->addr, desc->len);
 	return NFS4_OK;
 }
+#endif				/* CEPH_PNFS */
 
 void pnfs_ds_ops_init(struct fsal_pnfs_ds_ops *ops)
 {
 	memcpy(ops, &def_pnfs_ds_ops, sizeof(struct fsal_pnfs_ds_ops));
+#if 0
 	ops->make_ds_handle = make_ds_handle;
 	ops->fsal_dsh_ops = dsh_ops_init;
+#endif
 }
 
-#endif				/* CEPH_PNFS */
+

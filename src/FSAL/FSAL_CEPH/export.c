@@ -326,7 +326,4 @@ void export_ops_init(struct export_ops *ops)
 	ops->get_fs_dynamic_info = get_fs_dynamic_info;
 	ops->alloc_state = ceph_alloc_state;
 	ops->free_state = ceph_free_state;
-#ifdef CEPH_PNFS
-	export_ops_pnfs(ops);
-#endif				/* CEPH_PNFS */
 }

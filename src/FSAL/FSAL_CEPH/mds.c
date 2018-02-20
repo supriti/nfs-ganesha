@@ -32,7 +32,6 @@
 #include "FSAL/fsal_commonlib.h"
 #include "statx_compat.h"
 
-#ifdef CEPH_PNFS
 
 /**
  * Linux supports a stripe pattern with no more than 4096 stripes, but
@@ -54,6 +53,7 @@ static const size_t BIGGEST_PATTERN = 1024;
  * support for the Ceph FSAL.
  */
 
+#if 0
 static bool initiate_recall(vinodeno_t vi, bool write, void *opaque)
 {
 	/* The private 'full' object handle */
@@ -78,6 +78,7 @@ static bool initiate_recall(vinodeno_t vi, bool write, void *opaque)
 
 	return true;
 }
+#endif
 
 /**
  * @brief Describe a Ceph striping pattern
@@ -92,11 +93,12 @@ static bool initiate_recall(vinodeno_t vi, bool write, void *opaque)
  *
  * @return Valid error codes in RFC 5661, p. 365.
  */
-
-static nfsstat4 getdeviceinfo(struct fsal_export *export_pub,
-			      XDR *da_addr_body, const layouttype4 type,
-			      const struct pnfs_deviceid *deviceid)
+nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
+					XDR *da_addr_body,
+					const layouttype4 type,
+					const struct pnfs_deviceid *deviceid)
 {
+#if 0
 	/* Full 'private' export */
 	struct ceph_export *export =
 		container_of(export_pub, struct ceph_export, export);
@@ -195,7 +197,7 @@ static nfsstat4 getdeviceinfo(struct fsal_export *export_pub,
 		if (nfs_status != NFS4_OK)
 			return nfs_status;
 	}
-
+#endif
 	return NFS4_OK;
 }
 
@@ -237,7 +239,8 @@ static nfsstat4 getdevicelist(struct fsal_export *export_pub, layouttype4 type,
 static void fs_layouttypes(struct fsal_export *export_pub, int32_t *count,
 			   const layouttype4 **types)
 {
-	static const layouttype4 supported_layout_type = LAYOUT4_NFSV4_1_FILES;
+	//SUPU: Change to flex files
+	static const layouttype4 supported_layout_type = LAYOUT4_FLEX_FILES;
 	*types = &supported_layout_type;
 	*count = 1;
 }
@@ -294,20 +297,25 @@ static size_t fs_loc_body_size(struct fsal_export *export_pub)
  *
  * @return Size of the buffer needed for a ds_addr
  */
-static size_t fs_da_addr_size(struct fsal_export *export_pub)
+size_t fs_da_addr_size(struct fsal_module *fsal_hdl)
 {
 	return 0x1400;
 }
 
-void export_ops_pnfs(struct export_ops *ops)
+void fsal_ops_pnfs(struct fsal_ops *ops)
 {
 	ops->getdeviceinfo = getdeviceinfo;
+	ops->fs_da_addr_size = fs_da_addr_size;
+}
+
+void export_ops_pnfs(struct export_ops *ops)
+{
 	ops->getdevicelist = getdevicelist;
 	ops->fs_layouttypes = fs_layouttypes;
 	ops->fs_layout_blocksize = fs_layout_blocksize;
 	ops->fs_maximum_segments = fs_maximum_segments;
 	ops->fs_loc_body_size = fs_loc_body_size;
-	ops->fs_da_addr_size = fs_da_addr_size;
+
 }
 
 /**
@@ -333,6 +341,7 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 			  const struct fsal_layoutget_arg *arg,
 			  struct fsal_layoutget_res *res)
 {
+#if 0
 	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
@@ -535,6 +544,9 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 	PTHREAD_RWLOCK_unlock(&handle->handle.obj_lock);
 
 	return nfs_status;
+#endif
+	//SUPU: remove this
+	return 1;
 }
 
 /**
@@ -555,6 +567,7 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 			     struct req_op_context *req_ctx, XDR *lrf_body,
 			     const struct fsal_layoutreturn_arg *arg)
 {
+#if 0
 	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
@@ -593,7 +606,9 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 		PTHREAD_RWLOCK_unlock(&handle->handle.obj_lock);
 	}
 
+#endif
 	return NFS4_OK;
+
 }
 
 /**
@@ -617,6 +632,7 @@ static nfsstat4 layoutcommit(struct fsal_obj_handle *obj_pub,
 			     const struct fsal_layoutcommit_arg *arg,
 			     struct fsal_layoutcommit_res *res)
 {
+#if 0
 	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
@@ -693,6 +709,7 @@ static nfsstat4 layoutcommit(struct fsal_obj_handle *obj_pub,
 
 	res->commit_done = true;
 
+#endif
 	return NFS4_OK;
 }
 
@@ -703,4 +720,3 @@ void handle_ops_pnfs(struct fsal_obj_ops *ops)
 	ops->layoutcommit = layoutcommit;
 }
 
-#endif				/* CEPH_PNFS */

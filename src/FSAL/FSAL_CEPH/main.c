@@ -48,6 +48,7 @@
 #include "export_mgr.h"
 #include "statx_compat.h"
 #include "nfs_core.h"
+#include "pnfs_utils.h"
 
 /**
  * The name of this module.
@@ -87,6 +88,8 @@ struct ceph_fsal_module CephFSM = {
 		#ifdef USE_FSAL_CEPH_LL_DELEGATION
 			.delegations = FSAL_OPTION_FILE_READ_DELEG,
 		#endif
+			.pnfs_mds = true,
+			.pnfs_ds = true,
 		}
 	}
 };
@@ -96,6 +99,10 @@ static struct config_item ceph_items[] = {
 		ceph_fsal_module, conf_path),
 	CONF_ITEM_MODE("umask", 0,
 			ceph_fsal_module, fsal.fs_info.umask),
+	CONF_ITEM_BOOL("pnfs_mds", true,
+			ceph_fsal_module, fsal.fs_info.pnfs_mds),
+	CONF_ITEM_BOOL("pnfs_ds", true,
+			ceph_fsal_module, fsal.fs_info.pnfs_ds),
 	CONFIG_EOL
 };
 
@@ -321,7 +328,6 @@ static fsal_status_t create_export(struct fsal_module *module_in,
 	}
 
 	enable_delegations(export);
-
 	if (fsal_attach_export(module_in, &export->export.exports) != 0) {
 		status.major = ERR_FSAL_SERVERFAULT;
 		LogCrit(COMPONENT_FSAL,
@@ -351,6 +357,54 @@ static fsal_status_t create_export(struct fsal_module *module_in,
 
 	export->root = handle;
 	op_ctx->fsal_export = &export->export;
+
+	/*
+	 * Check if its a ds server
+	*/
+	export->pnfs_ds_enabled =
+			export->export.exp_ops.fs_supports(&export->export,
+						fso_pnfs_ds_supported);
+
+	if (export->pnfs_ds_enabled) {
+		struct fsal_pnfs_ds *pds = NULL;
+
+		status = module_in->m_ops.fsal_pnfs_ds(module_in,
+							parse_node, &pds);
+		if (status.major != ERR_FSAL_NO_ERROR)
+			goto error;
+
+		/* special case: server_id matches export_id */
+		pds->id_servers = op_ctx->ctx_export->export_id;
+		pds->mds_export = op_ctx->ctx_export;
+		pds->mds_fsal_export = op_ctx->fsal_export;
+
+		if (!pnfs_ds_insert(pds)) {
+			LogCrit(COMPONENT_CONFIG,
+				"Server id %d already in use.",
+				pds->id_servers);
+			status.major = ERR_FSAL_EXIST;
+			goto error;
+		}
+
+		LogDebug(COMPONENT_PNFS,
+			 "cephfs_create_export: pnfs ds was enabled for [%s]",
+			 op_ctx->ctx_export->fullpath);
+	}
+
+	/*
+	 * Check if this is mds server.
+	 */
+	export->pnfs_mds_enabled =
+			export->export.exp_ops.fs_supports(&export->export,
+						fso_pnfs_mds_supported);
+
+	if (export->pnfs_mds_enabled) {
+		LogDebug(COMPONENT_PNFS,
+			 "cephfs_fsal_create: pnfs mds was enabled for [%s]",
+			 op_ctx->ctx_export->fullpath);
+		export_ops_pnfs(&export->export.exp_ops);
+		fsal_ops_pnfs(&export->export.fsal->m_ops);
+	}
 
 	return status;
 
@@ -391,11 +445,15 @@ MODULE_INIT void init(void)
 	}
 
 	/* Set up module operations */
-#ifdef CEPH_PNFS
-	myself->m_ops.fsal_pnfs_ds_ops = pnfs_ds_ops_init;
-#endif				/* CEPH_PNFS */
 	myself->m_ops.create_export = create_export;
 	myself->m_ops.init_config = init_config;
+
+	/*
+	 * Following inits needed for pNFS support
+	 * get device info will used by pnfs meta data server
+	 */
+	myself->m_ops.getdeviceinfo = getdeviceinfo;
+	myself->m_ops.fsal_pnfs_ds_ops = pnfs_ds_ops_init;
 
 	/* Initialize the fsal_obj_handle ops for FSAL CEPH */
 	handle_ops_init(&CephFSM.handle_ops);
