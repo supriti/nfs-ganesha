@@ -2,6 +2,7 @@
 
 # You must initialize the gobject/dbus support for threading
 # before doing anything.
+from __future__ import print_function
 import gobject
 import sys
 
@@ -20,7 +21,7 @@ try:
 	admin = bus.get_object("org.ganesha.nfsd",
                        "/org/ganesha/nfsd/ClientMgr")
 except: # catch *all* exceptions
-      print "Error: Can't talk to ganesha service on d-bus. Looks like Ganesha is down"
+      print("Error: Can't talk to ganesha service on d-bus. Looks like Ganesha is down")
       exit(1)
 
 
