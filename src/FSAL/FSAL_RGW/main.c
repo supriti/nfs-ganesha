@@ -79,6 +79,12 @@ struct rgw_fsal_module RGWFSM = {
 			.maxwrite = FSAL_MAXIOSIZE,
 			.umask = 0,
 			.rename_changes_key = true,
+			.maxfilesize = UINT64_MAX,
+			.maxlink = 1024,
+			.maxnamelen = UINT32_MAX,
+			.maxpathlen = UINT32_MAX,
+			.lease_time = { 300, 0 },
+			.acl_support = FSAL_ACLSUPPORT_DENY,
 			#if HAVE_DIRENT_OFFSETOF
 				.compute_readdir_cookie = true,
 			#endif
