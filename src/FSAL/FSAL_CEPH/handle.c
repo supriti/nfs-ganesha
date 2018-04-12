@@ -2421,7 +2421,5 @@ void handle_ops_init(struct fsal_obj_ops *ops)
 #endif
 	ops->setattr2 = ceph_setattr2;
 	ops->close2 = ceph_close2;
-#ifdef CEPH_PNFS
 	handle_ops_pnfs(ops);
-#endif				/* CEPH_PNFS */
 }

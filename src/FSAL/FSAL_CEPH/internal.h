@@ -108,40 +108,24 @@ struct ceph_handle {
 	struct ceph_export *export;
 	vinodeno_t vi;		/*< The object identifier */
 	struct fsal_share share;
-#ifdef CEPH_PNFS
-	uint64_t rd_issued;
-	uint64_t rd_serial;
-	uint64_t rw_issued;
-	uint64_t rw_serial;
-	uint64_t rw_max_len;
-#endif				/* CEPH_PNFS */
 };
-
-#ifdef CEPH_PNFS
 
 /**
  * The wire content of a DS (data server) handle
  */
-
-struct ds_wire {
-	struct wire_handle wire; /*< All the information of a regualr handle */
+struct ceph_ds_wire {
 	struct ceph_file_layout layout;	/*< Layout information */
-	uint64_t snapseq; /*< And a single entry giving a degernate
-			      snaprealm. */
+	vinodeno_t vi;
+	uint64_t snapseq;
 };
 
 /**
  * The full, 'private' DS (data server) handle
  */
-
-struct ds {
+struct ceph_ds_handle {
 	struct fsal_ds_handle ds;	/*< Public DS handle */
-	struct ds_wire wire;	/*< Wire data */
-	bool connected;		/*< True if the handle has been connected
-				   (in Ceph) */
+	struct ceph_ds_wire wire;	/*< Wire data */
 };
-
-#endif				/* CEPH_PNFS */
 
 #define CEPH_SUPPORTED_ATTRS ((const attrmask_t) (ATTRS_POSIX))
 

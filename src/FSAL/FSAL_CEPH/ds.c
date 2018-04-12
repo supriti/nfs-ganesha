@@ -50,23 +50,6 @@
 	typeof(a) _a = (a);			\
 	typeof(b) _b = (b);			\
 	_a < _b ? _a : _b; })
-#ifdef CEPH_PNFS
-/**
- * @brief Local invalidate
- *
- * A shortcut method for invalidating inode attributes.  It is
- * not sufficient to invalidate locally, but is immediate and
- * correct when the MDS and DS are colocated.
- */
-static inline void local_invalidate(struct ds *ds, struct fsal_export *export)
-{
-	struct gsh_buffdesc key = {
-		.addr = &ds->wire.wire.vi,
-		.len = sizeof(ds->wire.wire.vi)
-	};
-	up_async_invalidate(general_fridge, export->up_ops, export->fsal, &key,
-			    CACHE_INODE_INVALIDATE_ATTRS, NULL, NULL);
-}
 
 /**
  * @brief Release a DS handle
@@ -76,7 +59,8 @@ static inline void local_invalidate(struct ds *ds, struct fsal_export *export)
 static void ds_release(struct fsal_ds_handle *const ds_pub)
 {
 	/* The private 'full' DS handle */
-	struct ds *ds = container_of(ds_pub, struct ds, ds);
+	struct ceph_ds_handle *ds =
+		container_of(ds_pub, struct ceph_ds_handle, ds);
 
 	fsal_ds_handle_fini(&ds->ds);
 	gsh_free(ds);
@@ -109,47 +93,38 @@ static nfsstat4 ds_read(struct fsal_ds_handle *const ds_pub,
 			count4 * const supplied_length,
 			bool * const end_of_file)
 {
-	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
-	/* The private 'full' DS handle */
-	struct ds *ds = container_of(ds_pub, struct ds, ds);
-	/* The OSD number for this machine */
+	struct ceph_ds_handle *ds =
+		container_of(ds_pub, struct ceph_ds_handle, ds);
 	int local_OSD = 0;
-	/* Width of a stripe in the file */
 	uint32_t stripe_width = 0;
-	/* Beginning of a block */
 	uint64_t block_start = 0;
-	/* Number of the stripe being read */
 	uint32_t stripe = 0;
-	/* Internal offset within the stripe */
 	uint32_t internal_offset = 0;
-	/* The amount actually read */
 	int amount_read = 0;
-
-	/* Find out what my OSD ID is, so we can avoid talking to
-	   other OSDs. */
+	struct Inode *inode = NULL;
 
 	local_OSD = ceph_get_local_osd(export->cmount);
 	if (local_OSD < 0)
 		return posix2nfs4_error(-local_OSD);
-
-	/* Find out what stripe we're writing to and where within the
-	   stripe. */
 
 	stripe_width = ds->wire.layout.fl_stripe_unit;
 	stripe = offset / stripe_width;
 	block_start = stripe * stripe_width;
 	internal_offset = offset - block_start;
 
-	if (local_OSD !=
-	    ceph_ll_get_stripe_osd(export->cmount, ds->wire.wire.vi, stripe,
+	/* Get inode from vinode */
+	inode = ceph_ll_get_inode(export->cmount, ds->wire.vi);
+
+	/*if (local_OSD !=
+			ceph_ll_get_stripe_osd(export->cmount, inode, stripe,
 				   &(ds->wire.layout))) {
 		return NFS4ERR_PNFS_IO_HOLE;
-	}
+	}*/
 
 	amount_read =
-	    ceph_ll_read_block(export->cmount, ds->wire.wire.vi, stripe, buffer,
+	ceph_ll_read_block(export->cmount, inode, stripe, buffer,
 			       internal_offset,
 			       min((stripe_width - internal_offset),
 				   requested_length), &(ds->wire.layout));
@@ -195,128 +170,59 @@ static nfsstat4 ds_write(struct fsal_ds_handle *const ds_pub,
 			 verifier4 * const writeverf,
 			 stable_how4 * const stability_got)
 {
-	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
-	/* The private 'full' DS handle */
-	struct ds *ds = container_of(ds_pub, struct ds, ds);
-	/* The OSD number for this host */
+	struct ceph_ds_handle *ds =
+		container_of(ds_pub, struct ceph_ds_handle, ds);
 	int local_OSD = 0;
-	/* Width of a stripe in the file */
 	uint32_t stripe_width = 0;
-	/* Beginning of a block */
 	uint64_t block_start = 0;
-	/* Number of the stripe being written */
 	uint32_t stripe = 0;
-	/* Internal offset within the stripe */
 	uint32_t internal_offset = 0;
-	/* The amount actually written */
 	int32_t amount_written = 0;
 	/* The adjusted write length, confined to one object */
 	uint32_t adjusted_write = 0;
-	/* Return code from ceph calls */
-	int ceph_status = 0;
+	struct Inode *inode = NULL;
 
 	memset(*writeverf, 0, NFS4_VERIFIER_SIZE);
 
 	/* Find out what my OSD ID is, so we can avoid talking to
 	   other OSDs. */
-
 	local_OSD = ceph_get_local_osd(export->cmount);
+	if (local_OSD < 0)
+		return posix2nfs4_error(-local_OSD);
 
 	/* Find out what stripe we're writing to and where within the
 	   stripe. */
-
 	stripe_width = ds->wire.layout.fl_stripe_unit;
 	stripe = offset / stripe_width;
 	block_start = stripe * stripe_width;
 	internal_offset = offset - block_start;
 
+	/* Get inode from vinode */
+	inode = ceph_ll_get_inode(export->cmount, ds->wire.vi);
+
+#if 0
+	/* Segmentation fault in this call disabling it for now */
 	if (local_OSD !=
-	    ceph_ll_get_stripe_osd(export->cmount, ds->wire.wire.vi, stripe,
+			ceph_ll_get_stripe_osd(export->cmount, inode, stripe,
 				   &(ds->wire.layout))) {
 		return NFS4ERR_PNFS_IO_HOLE;
 	}
+#endif
 
 	adjusted_write = min((stripe_width - internal_offset), write_length);
-
-	/* If the client specifies FILE_SYNC4, then we have to connect
-	   the filehandle and use the MDS to update size and access
-	   time. */
-	if (stability_wanted == FILE_SYNC4) {
-		Fh *descriptor = NULL;
-
-		if (!ds->connected) {
-			ceph_status = ceph_ll_connectable_m(
-				export->cmount,
-				&ds->wire.wire.vi,
-				ds->wire.wire.parent_ino,
-				ds->wire.wire.parent_hash);
-			if (ceph_status != 0) {
-				LogMajor(COMPONENT_PNFS,
-					 "Filehandle connection failed with: %d\n",
-					 ceph_status);
-				return posix2nfs4_error(-ceph_status);
-			}
-			ds->connected = true;
-		}
-		ceph_status = fsal_ceph_ll_open(
-			export->cmount, ds->wire.wire.vi,
-			O_WRONLY, &descriptor, op_ctx->creds);
-		if (ceph_status != 0) {
-			LogMajor(COMPONENT_FSAL,
-				 "Open failed with: %d", ceph_status);
-			return posix2nfs4_error(-ceph_status);
-		}
-
-		amount_written =
-		    ceph_ll_write(export->cmount, descriptor, offset,
-				  adjusted_write, buffer);
-
-		if (amount_written < 0) {
-			LogMajor(COMPONENT_FSAL,
-				 "Write failed with: %d", amount_written);
-			ceph_ll_close(export->cmount, descriptor);
-			return posix2nfs4_error(-amount_written);
-		}
-
-		ceph_status = ceph_ll_fsync(export->cmount, descriptor, 0);
-		if (ceph_status < 0) {
-			LogMajor(COMPONENT_FSAL
-				"fsync failed with: %d", ceph_status);
-			ceph_ll_close(export->cmount, descriptor);
-			return posix2nfs4_error(-ceph_status);
-		}
-
-		ceph_status = ceph_ll_close(export->cmount, descriptor);
-		if (ceph_status < 0) {
-			LogMajor(COMPONENT_FSAL,
-				 "close failed with: %d",
-				 ceph_status);
-			return posix2nfs4_error(-ceph_status);
-		}
-
-		/* invalidate client caches */
-		local_invalidate(ds, &export->export);
-
-		*written_length = amount_written;
-		*stability_got = FILE_SYNC4;
-	} else {
-		/* FILE_SYNC4 wasn't specified, so we don't have to
-		   bother with the MDS. */
-
-		amount_written =
-		    ceph_ll_write_block(export->cmount, ds->wire.wire.vi,
+	amount_written =
+			ceph_ll_write_block(export->cmount, inode,
 					stripe, (char *)buffer, internal_offset,
 					adjusted_write, &(ds->wire.layout),
 					ds->wire.snapseq,
-					(stability_wanted == DATA_SYNC4));
-		if (amount_written < 0)
-			return posix2nfs4_error(-amount_written);
+				(stability_wanted == DATA_SYNC4));
+	if (amount_written < 0)
+		return posix2nfs4_error(-amount_written);
 
-		*written_length = amount_written;
-		*stability_got = stability_wanted;
-	}
+	*written_length = amount_written;
+	*stability_got = stability_wanted;
 
 	return NFS4_OK;
 }
@@ -342,32 +248,27 @@ static nfsstat4 ds_commit(struct fsal_ds_handle *const ds_pub,
 			  const offset4 offset, const count4 count,
 			  verifier4 * const writeverf)
 {
-#ifdef COMMIT_FIX
-	/* The private 'full' export */
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
-	/* The private 'full' DS handle */
-	struct ds *ds = container_of(ds_pub, struct ds, ds);
-	/* Error return from Ceph */
+	struct ceph_ds_handle *ds =
+		container_of(ds_pub, struct ceph_ds_handle, ds);
+	struct Inode *inode = NULL;
 	int rc = 0;
 
+	/* Get inode from vinode */
+	inode = ceph_ll_get_inode(export->cmount, ds->wire.vi);
 	/* Find out what stripe we're writing to and where within the
 	   stripe. */
-
-	rc = ceph_ll_commit_blocks(export->cmount, ds->wire.wire.vi, offset,
+	rc = ceph_ll_commit_blocks(export->cmount, inode, offset,
 				   (count == 0) ? UINT64_MAX : count);
 	if (rc < 0)
 		return posix2nfs4_error(rc);
-
-#endif				/* COMMIT_FIX */
-
 	memset(*writeverf, 0, NFS4_VERIFIER_SIZE);
 
-	LogCrit(COMPONENT_PNFS, "Commits should go to MDS\n");
 	return NFS4_OK;
 }
 
-static void dsh_ops_init(struct fsal_dsh_ops *ops)
+void dsh_ops_init(struct fsal_dsh_ops *ops)
 {
 	memcpy(ops, &def_dsh_ops, sizeof(struct fsal_dsh_ops));
 
@@ -391,45 +292,36 @@ static void dsh_ops_init(struct fsal_dsh_ops *ops)
  *
  * @return NFSv4.1 error codes.
  */
-
 static nfsstat4 make_ds_handle(struct fsal_pnfs_ds *const pds,
 			       const struct gsh_buffdesc *const desc,
 			       struct fsal_ds_handle **const handle,
 			       int flags)
 {
-	struct ds_wire *dsw = (struct ds_wire *)desc->addr;
-	struct ds *ds;			/* Handle to be created */
+	struct ceph_ds_wire *dsw =
+		(struct ceph_ds_wire *)desc->addr;
+	struct ceph_ds_handle *ds;
 
 	*handle = NULL;
 
-	if (desc->len != sizeof(struct ds_wire))
+	if (desc->len != sizeof(struct ceph_ds_wire))
 		return NFS4ERR_BADHANDLE;
 
 	if (dsw->layout.fl_stripe_unit == 0)
 		return NFS4ERR_BADHANDLE;
 
-	ds = gsh_calloc(1, sizeof(struct ds));
+	ds = gsh_calloc(1, sizeof(struct ceph_ds_handle));
 
 	*handle = &ds->ds;
 	fsal_ds_handle_init(*handle, pds);
-
-	/* Connect lazily when a FILE_SYNC4 write forces us to, not
-	   here. */
-
-	ds->connected = false;
-
 	memcpy(&ds->wire, desc->addr, desc->len);
 	return NFS4_OK;
 }
-#endif				/* CEPH_PNFS */
 
 void pnfs_ds_ops_init(struct fsal_pnfs_ds_ops *ops)
 {
 	memcpy(ops, &def_pnfs_ds_ops, sizeof(struct fsal_pnfs_ds_ops));
-#if 0
 	ops->make_ds_handle = make_ds_handle;
 	ops->fsal_dsh_ops = dsh_ops_init;
-#endif
 }
 
 
