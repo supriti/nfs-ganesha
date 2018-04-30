@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # manage_clients.py - commandline tool for managing clients of nfs-ganesha.
 #

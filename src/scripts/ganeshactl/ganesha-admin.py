@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # ganesha-admin.py - commandline tool for admin of nfs-ganesha.
 #

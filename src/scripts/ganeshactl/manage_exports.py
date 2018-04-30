@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # manage_exports.py - commandline tool for managing exports in nfs-ganesha.
 #
