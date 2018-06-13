@@ -296,9 +296,9 @@ nfsstat4 FSAL_encode_file_layout(XDR *xdrs,
 		}
 
 		if (!xdr_bytes(xdrs,
-			       (char **)&handle.nfs_fh4_val,
-			       &handle.nfs_fh4_len,
-			       handle.nfs_fh4_len)) {
+				(char **)&handle.nfs_fh4_val,
+				&handle.nfs_fh4_len,
+				handle.nfs_fh4_len)) {
 			LogMajor(COMPONENT_PNFS, "Failed encoding FH %zu.", i);
 			return NFS4ERR_SERVERFAULT;
 		}

@@ -32,7 +32,6 @@
 #include "FSAL/fsal_commonlib.h"
 #include "statx_compat.h"
 
-
 /**
  * Linux supports a stripe pattern with no more than 4096 stripes, but
  * for now we stick to 1024 to keep them da_addrs from being too
@@ -69,7 +68,7 @@ static bool initiate_recall(vinodeno_t vi, bool write, void *opaque)
 		.io_mode = (write ? LAYOUTIOMODE4_RW : LAYOUTIOMODE4_READ)
 	};
 
-	status = handle->up_ops->layoutrecall(&key, LAYOUT4_NFSV4_1_FILES,
+	status = handle->up_ops->layoutrecall(&key, LAYOUT4_FLEX_FILES,
 		false, &segment, NULL, NULL);
 
 	if (status != STATE_SUCCESS)
@@ -109,13 +108,21 @@ nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
 	struct Inode *inode = NULL;
 	vinodeno_t vinode;
 	unsigned int num_osds;
-	uint32_t stripes = 1;
-	//size_t stripe = 0;
 	size_t osd = 0;
 	nfsstat4 nfs_status = 0;
 	uint16_t export_id;
-	uint32_t stripe_ind = 0;
-	unsigned int num_ds = 1;
+
+
+	/*
+	 * SUPU: Adding these values here. Need to populate them properly
+	*/
+	const bool_t ffdv_tightly_coupled = 1;
+	const uint32_t ffdv_wsize = 1048576;
+	const uint32_t ffdv_rsize = 1048576;
+	const uint32_t ffdv_minorversion = 1;
+	const uint32_t ffdv_version = 4;
+	const u_int multipath_list4_len = 1;
+	const u_int ffda_versions_len = 1;
 
 	if (type != LAYOUT4_FLEX_FILES) {
 		LogCrit(COMPONENT_PNFS, "Unsupported layout type: %x", type);
@@ -157,29 +164,9 @@ nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
 		return NFS4ERR_UNKNOWN_LAYOUTTYPE;
 	}
 
-	if (!inline_xdr_u_int32_t(da_addr_body, &stripes)) {
-		LogMajor(COMPONENT_PNFS,
-			 "Failed to encode length of stripe_indices array: %"
-				PRIu32 ".", stripes);
-		return NFS4ERR_SERVERFAULT;
-	}
-
-	if (!inline_xdr_u_int32_t(da_addr_body, &stripe_ind)) {
-		LogMajor(COMPONENT_PNFS,
-			 "Failed to encode ds for the stripe:  %"
-			 PRIu32 ".", stripe_ind);
-		return NFS4ERR_SERVERFAULT;
-	}
-
-	if (!inline_xdr_u_int32_t(da_addr_body, &num_ds)) {
-		LogMajor(COMPONENT_PNFS,
-			 "Failed to encode length of multipath_ds_list array: %u",
-			 num_ds);
-		return NFS4ERR_SERVERFAULT;
-	}
-
 	/* Since our index is the OSD number itself, we have only one
-	   host per multipath_list. */
+		host per multipath_list. */
+	num_osds = 1;
 	for (osd = 0; osd < num_osds; osd++) {
 		fsal_multipath_member_t host;
 
@@ -190,8 +177,15 @@ nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
 				"Unable to get IP address for OSD %lu.", osd);
 			return NFS4ERR_SERVERFAULT;
 		}
+
 		host.port = 2049;
-		nfs_status = FSAL_encode_v4_multipath(da_addr_body, 1, &host);
+		nfs_status =
+			FSAL_encode_ff_device_versions4(da_addr_body,
+				multipath_list4_len, ffda_versions_len,
+				&host, ffdv_version,
+				ffdv_minorversion, ffdv_rsize,
+				ffdv_wsize, ffdv_tightly_coupled);
+
 		if (nfs_status != NFS4_OK)
 			return nfs_status;
 	}
@@ -212,10 +206,11 @@ nfsstat4 getdeviceinfo(struct fsal_module *fsal_hdl,
  * @return Valid error codes in RFC 5661, pp. 365-6.
  */
 
-static nfsstat4 getdevicelist(struct fsal_export *export_pub, layouttype4 type,
-			      void *opaque, bool(*cb) (void *opaque,
-						       const uint64_t id),
-			      struct fsal_getdevicelist_res *res)
+static nfsstat4 getdevicelist(struct fsal_export *export_pub,
+					layouttype4 type, void *opaque,
+					bool (*cb)(void *opaque,
+							const uint64_t id),
+					struct fsal_getdevicelist_res *res)
 {
 	res->eof = true;
 	return NFS4_OK;
@@ -233,8 +228,9 @@ static nfsstat4 getdevicelist(struct fsal_export *export_pub, layouttype4 type,
  *                        after export reference is relinquished
  */
 
-static void fs_layouttypes(struct fsal_export *export_pub, int32_t *count,
-			   const layouttype4 **types)
+static void fs_layouttypes(struct fsal_export *export_pub,
+						int32_t *count,
+						const layouttype4 **types)
 {
 	static const layouttype4 supported_layout_type = LAYOUT4_FLEX_FILES;
 	*types = &supported_layout_type;
@@ -334,9 +330,9 @@ void export_ops_pnfs(struct export_ops *ops)
  */
 
 static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
-			  struct req_op_context *req_ctx, XDR *loc_body,
-			  const struct fsal_layoutget_arg *arg,
-			  struct fsal_layoutget_res *res)
+				struct req_op_context *req_ctx, XDR *loc_body,
+				const struct fsal_layoutget_arg *arg,
+				struct fsal_layoutget_res *res)
 {
 	struct ceph_export *export =
 		container_of(req_ctx->fsal_export, struct ceph_export, export);
@@ -348,7 +344,6 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 			DEVICE_ID_INIT_ZERO(FSAL_ID_CEPH);
 	uint32_t stripe_width = 0;
 	uint64_t last_possible_byte = 0;
-	nfl_util4 util = 0;
 	nfsstat4 nfs_status = 0;
 
 	/* We support only LAYOUT4_FLEX_FILES layouts */
@@ -383,15 +378,14 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 	forbidden_area.offset = last_possible_byte + 1;
 
 	/* Since the Linux kernel refuses to work with any layout that
-	   doesn't cover the whole file, if a whole file layout is
-	   requested, lie.
+		 doesn't cover the whole file, if a whole file layout is
+		 requested, lie.
 
-	   Otherwise, make sure the required layout doesn't go beyond
-	   what can be accessed through pNFS. This is a preliminary
-	   check before even talking to Ceph. */
-	if (!
-	    ((res->segment.offset == 0)
-	     && (res->segment.length == NFS4_UINT64_MAX))) {
+		 Otherwise, make sure the required layout doesn't go beyond
+		 what can be accessed through pNFS. This is a preliminary
+		 check before even talking to Ceph. */
+	if (!((res->segment.offset == 0) &&
+		 (res->segment.length == NFS4_UINT64_MAX))) {
 		if (pnfs_segments_overlap(&smallest_acceptable,
 			&forbidden_area)) {
 			LogCrit(COMPONENT_PNFS,
@@ -405,36 +399,48 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 	}
 
 	LogDebug(COMPONENT_PNFS,
-		     "will issue layout offset: %" PRIu64 " length: %" PRIu64,
-		     res->segment.offset, res->segment.length);
+				"will issue layout offset: %"
+				PRIu64 " length: %" PRIu64,
+				res->segment.offset, res->segment.length);
 
 	/* We are using sparse layouts with commit-through-DS, so our
-	   utility word contains only the stripe width, our first
-	   stripe is always at the beginning of the layout, and there
-	   is no pattern offset. */
-
+		 utility word contains only the stripe width, our first
+		 stripe is always at the beginning of the layout, and there
+		 is no pattern offset. */
 	if ((stripe_width & ~NFL4_UFLG_STRIPE_UNIT_SIZE_MASK) != 0) {
 		LogCrit(COMPONENT_PNFS,
 			"Ceph returned stripe width that is disallowed by NFS: %"
 			PRIu32 ".", stripe_width);
 		return NFS4ERR_SERVERFAULT;
 	}
-	util = stripe_width;
 
 	/* For now, just make the low quad of the deviceid be the
-	   inode number.  With the span of the layouts constrained
-	   above, this lets us generate the device address on the fly
-	   from the deviceid rather than storing it. */
+	 * inode number.  With the span of the layouts constrained
+	 * above, this lets us generate the device address on the fly
+	 * from the deviceid rather than storing it.
+	 */
 
-		deviceid.device_id2 = arg->export_id;
-		deviceid.devid = handle->vi.ino.val;
+	deviceid.device_id2 = arg->export_id;
+	deviceid.devid = handle->vi.ino.val;
 
 	ds_wire.vi = handle->vi;
 	ds_wire.layout = file_layout;
 
-	nfs_status = FSAL_encode_file_layout(loc_body, &deviceid, util, 0, 0,
-		&req_ctx->fsal_export->export_id, 1,
-		&ds_desc);
+	/*SUPU: here we need a way to encode ffds_user/ffds_group*/
+	fattr4_owner ffds_user;
+
+	ffds_user.utf8string_val = "19452";
+	ffds_user.utf8string_len = strlen(ffds_user.utf8string_val);
+
+	uint32_t ffds_efficieny = 1;
+	nfs_status =
+		FSAL_encode_flex_file_layout(loc_body,
+					&deviceid, 0, 1, 1, 1,
+					&req_ctx->fsal_export->export_id,
+					&ds_desc, ffds_efficieny,
+					ffds_user, ffds_user,
+					FF_FLAGS_NO_IO_THRU_MDS, 0);
+
 	if (nfs_status != NFS4_OK) {
 		LogCrit(COMPONENT_PNFS,
 			"Failed to encode nfsv4_1_file_layout.");
@@ -442,12 +448,13 @@ static nfsstat4 layoutget(struct fsal_obj_handle *obj_pub,
 	}
 
 	/* We grant only one segment, and we want it back when the file
-	   is closed. */
+		 is closed. */
 	res->return_on_close = true;
 	res->last_segment = true;
 
 relinquish:
 	return nfs_status;
+
 }
 
 /**
@@ -468,6 +475,10 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 				struct req_op_context *req_ctx, XDR *lrf_body,
 				const struct fsal_layoutreturn_arg *arg)
 {
+	/*
+	 * SUPU: Here the stateid: seqid must be incremented by one.
+	 * https://tools.ietf.org/html/rfc5661#section-12.5.2
+	*/
 #if 0
 	/* The private 'full' export */
 	struct ceph_export *export =
@@ -477,7 +488,7 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 		container_of(obj_pub, struct ceph_handle, handle);
 
 	/* Sanity check on type */
-	if (arg->lo_type != LAYOUT4_NFSV4_1_FILES) {
+	if (arg->lo_type != LAYOUT4_FLEX_FILES) {
 		LogCrit(COMPONENT_PNFS, "Unsupported layout type: %x",
 			arg->lo_type);
 		return NFS4ERR_UNKNOWN_LAYOUTTYPE;
@@ -485,7 +496,8 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 
 	if (arg->dispose) {
 		PTHREAD_RWLOCK_wrlock(&handle->handle.obj_lock);
-		if (arg->cur_segment.io_mode == LAYOUTIOMODE4_READ) {
+		if (arg->cur_segment.io_mode
+				== LAYOUTIOMODE4_READ) {
 			if (--handle->rd_issued != 0) {
 				PTHREAD_RWLOCK_unlock(&handle->handle.obj_lock);
 				return NFS4_OK;
@@ -498,16 +510,20 @@ static nfsstat4 layoutreturn(struct fsal_obj_handle *obj_pub,
 		}
 
 #if 0
-		ceph_ll_return_rw(export->cmount, handle->wire.vi,
-				  arg->cur_segment.io_mode == LAYOUTIOMODE4_READ
-					? handle->rd_serial
-					: handle->rw_serial);
+	ceph_ll_return_rw(export->cmount, handle->wire.vi,
+			arg->cur_segment.io_mode == LAYOUTIOMODE4_READ
+			? handle->rd_serial
+			: handle->rw_serial);
 #endif
 
 		PTHREAD_RWLOCK_unlock(&handle->handle.obj_lock);
 	}
 #endif
-	return NFS4_OK;
+	/* SUPU: as there is no implementation of layoutreturn
+	 * the pnfs client keeps looping. hence trying to send
+	 * error to see how it behaves when it gets the error
+	 */
+	return NFS4ERR_SERVERFAULT;
 }
 
 /**
@@ -548,15 +564,15 @@ static nfsstat4 layoutcommit(struct fsal_obj_handle *obj_pub,
 	int ceph_status = 0;
 
 	/* Sanity check on type */
-	if (arg->type != LAYOUT4_NFSV4_1_FILES) {
+	if (arg->type != LAYOUT4_FLEX_FILES) {
 		LogCrit(COMPONENT_PNFS, "Unsupported layout type: %x",
 			arg->type);
 		return NFS4ERR_UNKNOWN_LAYOUTTYPE;
 	}
 
 	/* A more proper and robust implementation of this would use
-	   Ceph caps, but we need to hack at the client to expose
-	   those before it can work. */
+		 Ceph caps, but we need to hack at the client to expose
+		 those before it can work. */
 	ceph_status = fsal_ceph_ll_getattr(export->cmount, handle->i,
 			&stxold, CEPH_STATX_SIZE|CEPH_STATX_MTIME,
 			op_ctx->creds);
@@ -578,9 +594,9 @@ static nfsstat4 layoutcommit(struct fsal_obj_handle *obj_pub,
 	}
 
 	if (arg->time_changed &&
-	    (arg->new_time.seconds > stxold.stx_mtime ||
-	     (arg->new_time.seconds == stxold.stx_mtime &&
-	      arg->new_time.nseconds > stxold.stx_mtime_ns))) {
+			(arg->new_time.seconds > stxold.stx_mtime ||
+			(arg->new_time.seconds == stxold.stx_mtime &&
+			arg->new_time.nseconds > stxold.stx_mtime_ns))) {
 		stxnew.stx_mtime = arg->new_time.seconds;
 		stxnew.stx_mtime_ns = arg->new_time.nseconds;
 	} else {

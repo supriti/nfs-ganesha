@@ -146,6 +146,11 @@ static nfsstat4 ds_read(struct fsal_ds_handle *const ds_pub,
  * FILE_SYNC4 is specified, in which case it connects the filehandle
  * and performs an MDS write.
  *
+ * In case ffdv_tighly_coupuled is false, the writes MUST be committed
+ * by the client to stable storage via issuing WRITEs with
+ * stable_how == FILE_SYNC or by issuing a COMMIT after WRITEs
+ * with stable_how != FILE_SYNC
+ *
  * @param[in]  ds_pub           FSAL DS handle
  * @param[in]  req_ctx          Credentials
  * @param[in]  stateid          The stateid supplied with the READ operation,

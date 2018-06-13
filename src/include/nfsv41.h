@@ -3014,7 +3014,10 @@ struct ff_device_versions4 {
 typedef struct ff_device_versions4 ff_device_versions4;
 
 struct ff_device_addr4 {
-	multipath_list4 ffda_netaddrs;
+	struct {
+		u_int ffda_netaddrs_list_len;
+		multipath_list4 *ffda_netaddrs_list_val;
+	} ffda_netaddrs;
 	struct {
 		u_int ffda_versions_len;
 		ff_device_versions4 *ffda_versions_val;
@@ -3059,8 +3062,9 @@ struct ff_layout4 {
 		u_int ffl_mirrors_len;
 		ff_mirror4 *ffl_mirrors_val;
 	} ffl_mirrors;
-	ff_flags4               ffl_flags;
-	uint32_t                ffl_stats_collect_hint;
+	ff_flags4    ffl_flags;
+	uint32_t     ffl_stats_collect_hint;
+
 };
 typedef struct ff_layout4 ff_layout4;
 
@@ -5257,7 +5261,8 @@ static inline bool xdr_nfsv4_1_file_layout_ds_addr4(XDR *xdrs,
 	if (!xdr_array(xdrs,
 	    (char **)&objp->nflda_stripe_indices.nflda_stripe_indices_val,
 	    &objp->nflda_stripe_indices.nflda_stripe_indices_len,
-	    XDR_ARRAY_MAXLEN, sizeof(uint32_t), (xdrproc_t) xdr_uint32_t))
+	    XDR_ARRAY_MAXLEN,
+	    sizeof(uint32_t), (xdrproc_t) xdr_uint32_t))
 		return false;
 	if (!xdr_array(xdrs,
 	    (char **)&objp->nflda_multipath_ds_list.nflda_multipath_ds_list_val,
@@ -9157,7 +9162,11 @@ static inline bool xdr_ff_device_versions4(XDR *xdrs,
 
 static inline bool xdr_ff_device_addr4(XDR *xdrs, ff_device_addr4 *objp)
 {
-	if (!xdr_multipath_list4 (xdrs, &objp->ffda_netaddrs))
+	if (!xdr_array(xdrs,
+			(char **)&objp->ffda_netaddrs.ffda_netaddrs_list_val,
+			&objp->ffda_netaddrs.ffda_netaddrs_list_len,
+			XDR_ARRAY_MAXLEN,
+			sizeof(uint32_t), (xdrproc_t) xdr_uint32_t))
 		return false;
 	if (!xdr_array(xdrs,
 		       (char **)&objp->ffda_versions.ffda_versions_val,
@@ -9217,6 +9226,8 @@ static inline bool xdr_ff_layout4(XDR *xdrs, ff_layout4 *objp)
 		       (xdrproc_t) xdr_ff_mirror4))
 		return false;
 	if (!xdr_ff_flags(xdrs, &objp->ffl_flags))
+		return false;
+	if (!xdr_uint32_t(xdrs, &objp->ffl_stats_collect_hint))
 		return false;
 	return true;
 }
